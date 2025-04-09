@@ -12,6 +12,7 @@ const SYSTEM_PROMPT = `
   Break them into sections when appropriate.
   Use newlines.
   Do not hallucinate.
+  If you are unsure about the answer, say "I don't know".
 `;
 // Configure the LLM
 const llm = new OpenAI({
