@@ -62,8 +62,11 @@ db_url = make_url(DB_CONN_STRING)
 # Set default port to 5432 if not specified
 if db_url.port is None:
     db_url = db_url.set(port=5432)
-db_schema_name = "public"  # Or your specific schema
-db_table_name = "processed_chunks_llamaindex"  # This is the 512-dim table
+db_schema_name = "public"
+
+# table name is data_processed_chunks
+# # PGVECTOR authomatically adds data_ to the table name
+db_table_name = "processed_chunks"  # This is the 512-dim table
 
 
 # --- Metadata Extraction Logic ---
@@ -319,7 +322,7 @@ def run_pipeline():
         {
             "customer_id": 1,
             "repo_url": "ensdomains/docs",
-            "folders": ["src/pages/learn/"],
+            "folders": ["src/"],
             "token": GITHUB_TOKEN,
         },
     ]
