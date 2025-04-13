@@ -19,17 +19,23 @@ except ImportError:
     print("dotenv package not found, skipping .env loading")
 
 # LlamaIndex components
-from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
+from llama_index.core import (
+    Document,
+    Settings,
+    StorageContext,
+    VectorStoreIndex,
+    load_index_from_storage,
+)
 from llama_index.core.node_parser import MarkdownNodeParser
 from llama_index.vector_stores.postgres import PGVectorStore
 from llama_index.embeddings.voyageai import VoyageEmbedding
+from llama_index.llms.openai import OpenAI
 
 # Need llama-hub loader for GitHub
 # Ensure llama-hub is installed: pip install llama-hub
 # May require git executable in path
 from llama_index.readers.github import GithubRepositoryReader, GithubClient
 
-# Database connection (SQLAlchemy is common with LlamaIndex PGVectorStore)
 from sqlalchemy import make_url, create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -52,21 +58,21 @@ VOYAGE_MODEL = "voyage-3-lite"
 VOYAGE_DIMENSION = 512
 
 # Chunking / Parsing Parameters
-CHUNK_SIZE = 512  # Target size in tokens for LlamaIndex parser
+CHUNK_SIZE = 2048  # Target size in tokens for LlamaIndex parser
 
 # --- Database Setup ---
-if not DB_CONN_STRING:
-    raise ValueError("DATABASE_URL environment variable not set.")
+# if not DB_CONN_STRING:
+#     raise ValueError("DATABASE_URL environment variable not set.")
 
-db_url = make_url(DB_CONN_STRING)
-# Set default port to 5432 if not specified
-if db_url.port is None:
-    db_url = db_url.set(port=5432)
-db_schema_name = "public"
+# db_url = make_url(DB_CONN_STRING)
+# # Set default port to 5432 if not specified
+# if db_url.port is None:
+#     db_url = db_url.set(port=5432)
+# db_schema_name = "public"
 
-# table name is data_processed_chunks
-# # PGVECTOR authomatically adds data_ to the table name
-db_table_name = "processed_chunks"  # This is the 512-dim table
+# # table name is data_processed_chunks
+# # # PGVECTOR authomatically adds data_ to the table name
+# db_table_name = "processed_chunks"  # This is the 512-dim table
 
 
 # --- Metadata Extraction Logic ---
@@ -134,7 +140,9 @@ def extract_md_metadata(nodes: List[Any], customer_id: int) -> List[Any]:
 
 
 # --- Main Ingestion Function ---
-def run_ingestion_for_target(target: Dict[str, Any]):
+def run_ingestion_for_target(
+    target: Dict[str, Any], storage_context: Optional[StorageContext] = None
+):
     """Runs the LlamaIndex ingestion pipeline for a single customer target."""
     customer_id = target["customer_id"]
     repo_url = target["repo_url"]  # format 'owner/repo'
@@ -196,11 +204,26 @@ def run_ingestion_for_target(target: Dict[str, Any]):
         )
         # Load data for the default branch (e.g., main/master)
         logging.info(f"[{customer_id}] Loading documents from {owner}/{repo}...")
-        documents = reader.load_data(branch="master")  # Try master instead of main
+        # Try 'main' first, then 'master' if main fails
+        documents = []
+        branches_to_try = ["main", "master"]
+        for branch in branches_to_try:
+            try:
+                documents = reader.load_data(branch=branch)
+                if documents:
+                    logging.info(
+                        f"[{customer_id}] Successfully loaded from '{branch}' branch"
+                    )
+                    break
+            except Exception as e:
+                logging.warning(
+                    f"[{customer_id}] Failed to load from '{branch}' branch: {e}"
+                )
+
         logging.info(f"[{customer_id}] Loaded {len(documents)} documents.")
         if not documents:
             logging.warning(
-                f"[{customer_id}] No documents found for target {repo_url}. Skipping."
+                f"[{customer_id}] No documents found for target {repo_url} in any branch. Skipping."
             )
             return
     except Exception as e:
@@ -220,6 +243,13 @@ def run_ingestion_for_target(target: Dict[str, Any]):
             embed_batch_size=10,  # Optional: adjust batch size as needed
         )
 
+        # LLM
+        llm = OpenAI(
+            api_key=OPENAI_API_KEY,
+            model="gpt-4o-mini",
+            temperature=0.7,
+        )
+
         # Node Parser (Markdown specific)
         node_parser = MarkdownNodeParser(
             include_metadata=True,
@@ -227,31 +257,31 @@ def run_ingestion_for_target(target: Dict[str, Any]):
             header_path_separator="/",
         )  # Using default settings
 
-        # Vector Store
-        vector_store = PGVectorStore.from_params(
-            database=db_url.database,
-            host=db_url.host,
-            password=db_url.password,
-            port=db_url.port,
-            user=db_url.username,
-            table_name=db_table_name,
-            schema_name=db_schema_name,
-            embed_dim=VOYAGE_DIMENSION,  # Crucial: Match your embedding model
-        )
+        # Create or use existing storage context
+        # Get the absolute path to the storage directory
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        persist_dir = os.path.join(base_dir, "storage", str(customer_id))
+        print(f"[{customer_id}] Persist directory: {persist_dir}")
+        # Ensure the storage directory exists
+        os.makedirs(persist_dir, exist_ok=True)
 
-        # Contexts
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
+        if storage_context is None:
+            # Check if we have existing storage files
+            docstore_path = os.path.join(persist_dir, "docstore.json")
+            if not os.path.exists(docstore_path):
+                # If no existing storage, create a fresh storage context
+                storage_context = StorageContext.from_defaults()
+                # Initialize the storage directory
+                storage_context.persist(persist_dir=persist_dir)
+            else:
+                # Load existing storage context
+                storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
+
         # Service Context or Settings (depending on LlamaIndex version)
         # Newer approach using global settings:
-        Settings.llm = None  # Not needed for indexing
+        Settings.llm = llm
         Settings.embed_model = embed_model
         Settings.node_parser = node_parser
-        # Older approach:
-        # service_context = ServiceContext.from_defaults(
-        #     llm=None, # Not needed for indexing
-        #     embed_model=embed_model,
-        #     node_parser=node_parser
-        # )
 
     except Exception as e:
         logging.error(
@@ -261,15 +291,32 @@ def run_ingestion_for_target(target: Dict[str, Any]):
         return
 
     # 3. Parse Documents into Nodes & Add Metadata
-    # LlamaIndex does parsing implicitly when building the index,
-    # but we might want to intercept nodes to add metadata.
-    # An alternative is to parse first, enrich metadata, then index nodes.
-
     try:
         logging.info(f"[{customer_id}] Parsing documents into nodes...")
         # Use the node_parser explicitly to get nodes before indexing
         nodes = node_parser.get_nodes_from_documents(documents)
-        logging.info(f"[{customer_id}] Generated {len(nodes)} nodes.")
+
+        # Post-process nodes to merge small nodes with their following content
+        min_length = 500  # Define a minimum length for nodes
+        merged_nodes = []
+        current_node = None
+        for node in nodes:
+            if current_node is None:
+                current_node = node
+            else:
+                # Merge nodes if the current node is too short
+                if len(current_node.text) < min_length:
+                    current_node.text += " " + node.text
+                else:
+                    merged_nodes.append(current_node)
+                    current_node = node
+        # Add the last node if it exists
+        if current_node is not None:
+            merged_nodes.append(current_node)
+        logging.info(
+            f"Generated {len(merged_nodes)} nodes after merging {len(nodes)} small nodes."
+        )
+        nodes = merged_nodes
 
         logging.info(f"[{customer_id}] Extracting and adding metadata to nodes...")
         # Enrich nodes with custom metadata
@@ -296,16 +343,19 @@ def run_ingestion_for_target(target: Dict[str, Any]):
     # 4. Build / Update the Index
     try:
         logging.info(f"[{customer_id}] Building or updating vector store index...")
-        # This performs embedding and storage
-        # Pass nodes directly if already parsed and enriched
+
+        # Create a new index with the current nodes
         index = VectorStoreIndex(
             nodes=enriched_nodes,
             storage_context=storage_context,
-            # service_context=service_context # Older LlamaIndex
-            # Settings are used globally in newer versions
             show_progress=True,
         )
+
+        # Persist the index
+        index.storage_context.persist(persist_dir=persist_dir)
         logging.info(f"[{customer_id}] Index update complete for {repo_url}.")
+
+        return storage_context  # Return the storage context for reuse
 
     except Exception as e:
         # Catch potential embedding errors or DB errors during indexing
@@ -313,6 +363,7 @@ def run_ingestion_for_target(target: Dict[str, Any]):
             f"[{customer_id}] Failed to build/update index for {repo_url}: {e}",
             exc_info=True,
         )
+        return storage_context  # Return storage context even on error
 
 
 # --- Main Orchestration ---
@@ -325,15 +376,29 @@ def run_pipeline():
             "folders": ["src/"],
             "token": GITHUB_TOKEN,
         },
+        {
+            "customer_id": 1,
+            "repo_url": "ensdomains/ensips",
+            "folders": ["ensips/"],
+            "token": GITHUB_TOKEN,
+        },
+        {
+            "customer_id": 1,
+            "repo_url": "ensdomains/ens-support-docs",
+            "folders": ["docs/"],
+            "token": GITHUB_TOKEN,
+        },
     ]
     if not targets:
         logging.warning("No valid targets found. Exiting.")
         return
 
-    # Run ingestion for each target sequentially for simplicity in V1 worker
-    # Can parallelize later if needed, but manage resources carefully
+    # Initialize storage context for the first target
+    storage_context = None
+
+    # Run ingestion for each target, passing the storage context between them
     for target in targets:
-        run_ingestion_for_target(target)
+        storage_context = run_ingestion_for_target(target, storage_context)
 
     logging.info("LlamaIndex ingestion pipeline finished.")
 
