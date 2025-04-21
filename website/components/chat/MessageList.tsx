@@ -72,7 +72,6 @@ marked.setOptions({
 export function MessageList({ messages }: { messages: Message[] }) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageContainerRef = useRef<HTMLDivElement>(null); // Ref for the container
-  console.log(messages);
 
   const setupCodeBlocks = () => {
     if (messageContainerRef.current) {

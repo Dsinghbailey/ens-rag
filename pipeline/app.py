@@ -126,7 +126,7 @@ async def search_docs(query: str):
     Settings.embed_model = embedding_model
 
     # Load index from persisted storage
-    storage_context = StorageContext.from_defaults(persist_dir="./pipeline/storage/1")
+    storage_context = StorageContext.from_defaults(persist_dir="./storage/1")
 
     # Load all indices
     indices = load_indices_from_storage(storage_context)
