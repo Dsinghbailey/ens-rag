@@ -30,7 +30,7 @@ from llama_index.core.retrievers import QueryFusionRetriever
 
 # Configure logging
 logging.basicConfig(
-    level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 # Load environment variables
@@ -49,7 +49,7 @@ app.add_middleware(
 
 
 # Constants
-OUT_OF_SCOPE_PROMPT = "I'm sorry, the answer to that question isn't in my training data. You can reach out to the ENS team at [https://chat.ens.domains/](https://chat.ens.domains/)"
+OUT_OF_SCOPE_PROMPT = "I'm sorry, I'm not sure about that. You can reach out to the ENS team at [https://chat.ens.domains](https://chat.ens.domains)"
 SYSTEM_PROMPT = """
 **You are an AI assistant answering questions strictly based on the provided ENS documentation sources ONLY.**
 Your primary goal is accuracy based *solely* on the numbered sources below.
@@ -57,7 +57,7 @@ Your primary goal is accuracy based *solely* on the numbered sources below.
 **CRITICAL RULES:**
 1.  **DO NOT USE EXTERNAL KNOWLEDGE.** Base your entire answer *only* on the information explicitly present in the numbered sources provided in the 'SOURCES' section below.
 2.  **If the answer cannot be found within the 'SOURCES' section, DO NOT MAKE ONE UP.** Instead, output *only* the exact phrase `[OUT_OF_SCOPE]` and nothing else. Your confidence must be extremely high, derived directly from the source text.
-3.  **Cite sources accurately:** Use the corresponding number in square brackets `[#]` immediately after the information derived from that source. Every factual statement requires a citation. Only cite sources listed below.
+3.  **Cite sources accurately:** Use the corresponding number in square brackets `[]` immediately after the information derived from that source. Every factual statement requires a citation. Only cite sources listed below.
 4.  **Format using Markdown:** Use newlines, sections, and formatting for readability. Be concise.
 5.  **Do not add a 'References' section at the end.** This will be handled separately.
 
@@ -269,27 +269,22 @@ async def chat(request: ChatRequest):
             raise HTTPException(status_code=400, detail="Customer ID is required")
 
         user_message = messages[-1].content
-        logging.info(f"Received user message: {user_message}")
         search_result = await search_docs(user_message)
 
         # If the search result is out of scope, return the out of scope message directly
         if search_result["is_out_of_scope"]:
-            logging.info("Search result is out of scope")
+            logging.info("Response type: Out of scope")
 
             async def generate_out_of_scope_response():
-                logging.info(
-                    f"OUT OF SCOPE - Sending initial message: {OUT_OF_SCOPE_PROMPT}"
-                )
                 yield OUT_OF_SCOPE_PROMPT
 
-                # Add links section
-                links_header = "\n\n## Potentially Useful Links\n"
-                logging.info(f"OUT OF SCOPE - Sending links header: {links_header}")
-                yield links_header
+                # Add links section if there are sources
+                if search_result["sources"]:
+                    links_header = "\n\n## Potentially Useful Links\n"
+                    yield links_header
 
                 # Add each source
                 for source in search_result["sources"]:
-                    logging.info(f"Sending out-of-scope source: {source}")
                     yield source + "\n"
 
             return StreamingResponse(
@@ -335,7 +330,6 @@ async def chat(request: ChatRequest):
         )
 
         async def generate_response():
-            logging.info("Starting generate_response")
             response = await chat_engine.astream_chat(user_message)
             out_of_scope_detected = False
             response_chunks = []
@@ -346,7 +340,6 @@ async def chat(request: ChatRequest):
             async for message in response.async_response_gen():
                 response_chunks.append(message)
                 chunk_count += 1
-                logging.info(f"Chunk {chunk_count}: {message}")
 
                 # Only check first 5 chunks for out-of-scope
                 if chunk_count <= 5:
@@ -354,51 +347,43 @@ async def chat(request: ChatRequest):
                     # Check if the accumulated text contains the out-of-scope indicator
                     if "[OUT_OF_SCOPE]" in accumulated_text:
                         out_of_scope_detected = True
-                        logging.info("Out of scope detected in first 5 chunks")
                         break
                 elif chunk_count == 6:
-                    logging.info(f"Sending chunk 6 (accumulated): {accumulated_text}")
                     yield accumulated_text
-                    logging.info(f"Sending chunk 6 (current): {message}")
                     yield message
                 else:
-                    logging.info(f"Sending regular chunk: {message}")
                     yield message
 
             # If out of scope was detected in first 5 chunks, return the out of scope prompt
             if out_of_scope_detected:
-                logging.info(f"Sending out of scope response: {OUT_OF_SCOPE_PROMPT}")
+                logging.info("Response type: Out of scope")
                 yield OUT_OF_SCOPE_PROMPT
 
                 links_header = "\n\n## Potentially Useful Links\n"
-                logging.info(f"Sending links header: {links_header}")
                 yield links_header
 
                 for source in search_result["sources"]:
-                    logging.info(f"Sending source: {source}")
                     yield source + "\n"
                 return
 
             cited_numbers = set()
             citations_in_chunk = re.findall(r"\[(\d+)\]", "".join(response_chunks))
             cited_numbers.update(int(num) for num in citations_in_chunk)
-            logging.info(f"Cited numbers: {cited_numbers}")
 
             # Add references
             sorted_cited_numbers = sorted(list(cited_numbers))
 
             final_sources = []
+            logging.info("Context:")
+            logging.info(search_result["context_with_citations"])
             for i in sorted_cited_numbers:
                 if i in search_result["source_map"]:
                     final_sources.append(search_result["source_map"][i])
             if final_sources:
-                logging.info("Sending references header")
                 refs_header = "\n\n## References\n"
-                logging.info(f"Sending references header: {refs_header}")
                 yield refs_header
 
                 for source in final_sources:
-                    logging.info(f"Sending reference: {source}")
                     yield source + "\n"
 
         return StreamingResponse(
