@@ -36,7 +36,6 @@ export default function ChatPage() {
   const hasMessages = messages.length > 0;
   const isLoading = status === "submitted";
 
-  console.log("Messages:", messages);
   // UseEffect to change loading message
   useEffect(() => {
     if (!isLoading) return;
@@ -51,7 +50,7 @@ export default function ChatPage() {
     const interval = setInterval(() => {
       currentIndex = (currentIndex + 1) % messages.length;
       setLoadingMessage(messages[currentIndex]);
-    }, 2000); // Change message every 2 seconds
+    }, 1500); // Change message every 1.5 seconds
 
     return () => clearInterval(interval);
   }, [isLoading]);

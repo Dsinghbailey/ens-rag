@@ -3,70 +3,14 @@ import { marked } from "marked";
 import type { MarkedOptions } from "marked";
 import DOMPurify from "dompurify";
 import Prism from "prismjs";
-import type { Grammar } from "prismjs";
 import "prismjs/themes/prism-tomorrow.css";
 import { Message } from "ai/react";
-// Core languages - load these first
-import "prismjs/components/prism-core";
-import "prismjs/components/prism-clike";
-import "prismjs/components/prism-markup";
-import "prismjs/components/prism-c";
-import "prismjs/components/prism-cpp";
-import "prismjs/components/prism-javascript";
-import "prismjs/components/prism-typescript";
-import "prismjs/components/prism-jsx";
-import "prismjs/components/prism-tsx";
-import "prismjs/components/prism-css";
-import "prismjs/components/prism-scss";
-import "prismjs/components/prism-less";
-import "prismjs/components/prism-stylus";
-import "prismjs/components/prism-json";
-import "prismjs/components/prism-bash";
-import "prismjs/components/prism-python";
-import "prismjs/components/prism-rust";
-import "prismjs/components/prism-solidity";
-import "prismjs/components/prism-java";
-import "prismjs/components/prism-go";
-import "prismjs/components/prism-ruby";
-import "prismjs/components/prism-php";
-import "prismjs/components/prism-sql";
-import "prismjs/components/prism-markdown";
-import "prismjs/components/prism-yaml";
-import "prismjs/components/prism-toml";
-import "prismjs/components/prism-docker";
-import "prismjs/components/prism-git";
-import "prismjs/components/prism-diff";
-import "prismjs/components/prism-regex";
-import "prismjs/components/prism-graphql";
-import "prismjs/components/prism-protobuf";
 
 // Configure marked options
 marked.setOptions({
   breaks: true,
   gfm: true,
-  highlight: (code: string, lang: string) => {
-    if (lang && Prism.languages[lang as keyof typeof Prism.languages]) {
-      try {
-        // Special handling for Solidity
-        if (lang === "solidity") {
-          return Prism.highlight(
-            code,
-            Prism.languages.solidity as Grammar,
-            "solidity"
-          );
-        }
-        return Prism.highlight(
-          code,
-          Prism.languages[lang as keyof typeof Prism.languages] as Grammar,
-          lang
-        );
-      } catch (error) {
-        console.warn(`Failed to highlight code for language: ${lang}`, error);
-        return code;
-      }
-    }
-    return code;
-  },
+  langPrefix: "language-",
 } as MarkedOptions);
 
 export function MessageList({ messages }: { messages: Message[] }) {
@@ -76,35 +20,93 @@ export function MessageList({ messages }: { messages: Message[] }) {
     Record<string, string>
   >({});
 
+  // useEffect to log Prism languages
   useEffect(() => {
-    const formatMessages = async () => {
-      const formatted: Record<string, string> = {};
+    console.log("Prism languages", Prism.languages);
+  }, []);
+
+  // useEffect to format and pre-highlight messages
+  useEffect(() => {
+    let isMounted = true; // Handle component unmount during async operation
+
+    const processMessages = async () => {
+      const newFormattedMessages: Record<string, string> = {};
+
       for (const message of messages) {
         if (message.role === "assistant") {
-          formatted[message.id] = await formatMessage(message.content);
+          // Always re-process assistant messages when 'messages' changes,
+          // as the content string itself will update during streaming.
+          try {
+            newFormattedMessages[message.id] = await formatAndHighlightMessage(
+              message.content
+            );
+            // Optional: Log only if debugging is needed
+            // console.log(`processMessages: Formatted message ${message.id}`);
+          } catch (error) {
+            console.error(
+              `processMessages: Error formatting message ${message.id}`,
+              error
+            );
+            // Use raw content as fallback ONLY for the specific message that failed
+            newFormattedMessages[message.id] = message.content;
+          }
         }
+        // Note: User messages aren't processed here; they're rendered directly.
       }
-      setFormattedMessages(formatted);
+
+      // Update state if the component is still mounted
+      if (isMounted) {
+        // Let React handle diffing and optimize rendering if the actual HTML hasn't changed
+        setFormattedMessages(newFormattedMessages);
+      }
     };
-    formatMessages();
+
+    processMessages();
+
+    return () => {
+      isMounted = false; // Cleanup function to prevent state update on unmounted component
+    };
+    // Depend only on the messages array. When its reference changes
+    // (new message, stream update), re-run the processing.
   }, [messages]);
 
-  const setupCodeBlocks = () => {
-    if (messageContainerRef.current) {
-      Prism.highlightAllUnder(messageContainerRef.current);
+  // Simplified function to ONLY add copy buttons
+  const addCopyButtons = () => {
+    if (!messageContainerRef.current) {
+      console.log("addCopyButtons: messageContainerRef is null.");
+      return;
+    }
+    console.log("addCopyButtons: Checking for pre elements needing buttons.");
 
-      // Add copy buttons
-      const pres = messageContainerRef.current.querySelectorAll<HTMLPreElement>(
-        'pre:not([data-copy-added="true"])'
+    // Add copy buttons to NEW pre elements
+    const pres = messageContainerRef.current.querySelectorAll<HTMLPreElement>(
+      'pre[class*="language-"]:not([data-copy-added="true"])' // Target pre tags with language class
+    );
+
+    if (pres.length > 0) {
+      console.log(
+        `addCopyButtons: Found ${pres.length} pre elements to add copy buttons to.`
       );
-
       pres.forEach((pre) => {
         pre.setAttribute("data-copy-added", "true");
         pre.style.position = "relative";
 
+        const codeElement = pre.querySelector('code[class*="language-"]');
+        if (!codeElement) {
+          console.warn(
+            "addCopyButtons: Found pre tag without a language code block inside, skipping copy button.",
+            pre
+          );
+          return;
+        }
+
+        // --- Copy Button Creation and Logic (remains the same) ---
         const copyButton = document.createElement("button");
         copyButton.className =
-          "code-copy-button absolute top-2 right-2 p-1 rounded-md bg-gray-700 hover:bg-gray-600 cursor-pointer flex items-center justify-center w-auto h-auto";
+          "z-10 flex items-center justify-center w-auto h-auto p-1 bg-gray-700 rounded-md cursor-pointer code-copy-button hover:bg-gray-600";
+        copyButton.style.position = "absolute";
+        copyButton.style.top = "0.5rem";
+        copyButton.style.right = "0.5rem";
         copyButton.title = "Copy code";
         copyButton.innerHTML = `
               <span class="copy-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 text-gray-300"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span>
@@ -113,32 +115,21 @@ export function MessageList({ messages }: { messages: Message[] }) {
 
         copyButton.addEventListener("click", async (e) => {
           e.stopPropagation();
-
-          // Robust Code Extraction
-          const codeElement = pre.querySelector("code");
           let codeToCopy = "";
-          const nodeToClone = codeElement || pre;
-          const clone = nodeToClone.cloneNode(true) as HTMLElement;
-          const buttonInClone = clone.querySelector(".code-copy-button");
-          if (buttonInClone) {
-            buttonInClone.remove();
-          }
-          // If we cloned the pre, try to get text only from a code element inside if it exists
-          const codeInClone = clone.querySelector("code");
-          codeToCopy = codeInClone
-            ? codeInClone.textContent || ""
-            : clone.textContent || "";
-          codeToCopy = codeToCopy.trim();
+          // Use the actual code element's text content for copying
+          codeToCopy = (codeElement.textContent || "").trim();
 
           if (!codeToCopy) {
-            console.error("Failed to extract code to copy from pre:", pre);
+            console.error(
+              "Failed to extract code to copy from code element:",
+              codeElement
+            );
             return;
           }
 
           const copyIcon = copyButton.querySelector(".copy-icon");
           const successIcon = copyButton.querySelector(".success-icon");
 
-          // Copy to clipboard
           try {
             await navigator.clipboard.writeText(codeToCopy);
             if (copyIcon && successIcon) {
@@ -158,31 +149,43 @@ export function MessageList({ messages }: { messages: Message[] }) {
     }
   };
 
-  // Main effect for scrolling and highlighting
+  // Effect for scrolling and adding copy buttons
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Scroll to bottom whenever messages update
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
 
-    // First pass at highlighting
-    setupCodeBlocks();
-
-    // Schedule a second pass after the browser has rendered
-    const animationFrameId = requestAnimationFrame(() => {
-      setupCodeBlocks();
+    // Add copy buttons slightly delayed to ensure DOM is ready
+    // Using requestAnimationFrame ensures it runs after paint
+    const rafId = requestAnimationFrame(() => {
+      addCopyButtons();
     });
-    // Add a timeout to run the setupCodeBlocks function again
-    setTimeout(() => {
-      setupCodeBlocks();
-    }, 1000);
 
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [messages]);
+    return () => {
+      cancelAnimationFrame(rafId);
+    };
+    // Re-run when formattedMessages changes (meaning new content is rendered)
+    // or when messages length changes (new message added)
+  }, [formattedMessages, messages.length]);
 
-  const formatMessage = async (content: string) => {
+  // Renamed function: Formats, Sanitizes, AND Highlights
+  const formatAndHighlightMessage = async (
+    content: string
+  ): Promise<string> => {
+    console.log("formatAndHighlightMessage: Starting...");
+    // 1. Convert Markdown to HTML
     const rawHTML = await marked.parse(content);
+    console.log("formatAndHighlightMessage: Marked finished.");
+
+    // 2. Sanitize HTML
+    // Allow classes needed by Prism and data attributes
     const sanitizedHTML = DOMPurify.sanitize(rawHTML, {
-      ADD_TAGS: ["button", "span", "svg", "path", "rect", "polyline"],
+      ADD_TAGS: ["button", "span", "svg", "path", "rect", "polyline"], // Keep button tags for potential future use
       ADD_ATTR: [
-        "class",
+        "class", // Essential for Prism
+        "data-prism-highlighted", // Allow our marker
+        "data-copy-added", // Allow copy button marker
+        "target", // For links
+        // Attributes needed for copy button SVGs
         "width",
         "height",
         "viewBox",
@@ -197,27 +200,75 @@ export function MessageList({ messages }: { messages: Message[] }) {
         "rx",
         "ry",
         "d",
-        "target",
       ],
     });
+    console.log("formatAndHighlightMessage: DOMPurify finished.");
 
-    // Create a temporary div to parse the HTML
+    // 3. Parse sanitized HTML into a temporary DOM structure
     const tempDiv = document.createElement("div");
     tempDiv.innerHTML = sanitizedHTML;
 
-    // Add target="_blank" to all links
+    // 4. Find and Highlight code blocks within the temporary structure
+    const codeBlocks = tempDiv.querySelectorAll<HTMLElement>(
+      'pre code[class*="language-"]'
+    );
+    console.log(
+      `formatAndHighlightMessage: Found ${codeBlocks.length} code blocks to potentially highlight.`
+    );
+    codeBlocks.forEach((code) => {
+      // Ensure the language class is present (it should be after marked)
+      const languageMatch = code.className.match(/language-(\w+)/);
+      const language = languageMatch ? languageMatch[1] : null; // Extract language name
+
+      if (language) {
+        // Explicitly check if the language grammar is loaded in Prism
+        if (Prism.languages[language]) {
+          console.log(
+            `formatAndHighlightMessage: Language '${language}' grammar found. Attempting highlight.`
+          );
+          try {
+            Prism.highlightElement(code); // Highlight in the temporary DOM
+            console.log(
+              `formatAndHighlightMessage: Successfully highlighted code block (lang: ${language})`
+            );
+          } catch (error) {
+            console.error(
+              `formatAndHighlightMessage: Error during Prism.highlightElement for (lang: ${language})`,
+              error,
+              code
+            );
+          }
+        } else {
+          // Log a warning if the specific language component seems missing
+          console.warn(
+            `formatAndHighlightMessage: Skipping highlight for code block. Language grammar '${language}' NOT FOUND in Prism.languages. Check component import/loading.`,
+            code
+          );
+        }
+      } else {
+        console.warn(
+          `formatAndHighlightMessage: Skipping highlight for code block, could not extract language from class: ${code.className}`,
+          code
+        );
+      }
+    });
+
+    // 5. Add target="_blank" to links (can still do this here)
     const links = tempDiv.querySelectorAll("a");
     links.forEach((link) => {
       link.setAttribute("target", "_blank");
       link.setAttribute("rel", "noopener noreferrer");
     });
+    console.log(`formatAndHighlightMessage: Processed ${links.length} links.`);
 
-    // Return the sanitized HTML
-    return tempDiv.innerHTML;
+    // 6. Return the innerHTML of the modified temporary structure
+    const finalHTML = tempDiv.innerHTML;
+    console.log("formatAndHighlightMessage: Finished, returning final HTML.");
+    return finalHTML;
   };
 
   return (
-    <div ref={messageContainerRef} className="w-full space-y-4 py-8">
+    <div ref={messageContainerRef} className="w-full py-8">
       {messages.map((message) => (
         <div
           key={message.id}
@@ -235,36 +286,38 @@ export function MessageList({ messages }: { messages: Message[] }) {
             {message.role === "assistant" ? (
               <div
                 className="prose prose-sm max-w-none
-                  [&_h1]:text-2xl 
+                  [&_h1]:text-2xl
                   [&_h1]:mt-4
-                  [&_h2]:text-xl 
+                  [&_h2]:text-xl
                   [&_h2]:mt-4
-                  [&_h3]:text-lg 
+                  [&_h3]:text-lg
                   [&_h3]:mt-3
-                  [&_h4]:text-base 
+                  [&_h4]:text-base
                   [&_h4]:mt-3
-       
+
                   [&_ul]:mb-3
                   [&_ul]:list-disc
                   [&_ul]:pl-5
-                  
-                  [&_pre]:bg-gray-800 
-                  [&_pre]:p-4 
-                  [&_pre]:rounded-lg 
-                  [&_pre]:overflow-x-auto 
+
+                  [&_pre]:bg-gray-800
+                  [&_pre]:p-4
+                  [&_pre]:rounded-lg
+                  [&_pre]:overflow-x-auto
                   [&_pre]:mb-4
-                  
-                  [&_pre_code]:text-sm 
-                  [&_pre_code]:text-gray-100
-                  
-                  [&_code]:text-sm 
-                  [&_code]:bg-gray-900 
-                  [&_code]:text-gray-100 
-                  [&_code]:px-1 
-                  [&_code]:rounded 
-                  
+                  [&_pre]:whitespace-pre-wrap
+                  [&_pre]:break-words
+
+                  [&_pre_code]:whitespace-pre-wrap
+                  [&_pre_code]:word-break-normal
+
+                  [&_code:not(pre_>_code)]:text-sm
+                  [&_code:not(pre_>_code)]:bg-gray-900
+                  [&_code:not(pre_>_code)]:text-gray-100
+                  [&_code:not(pre_>_code)]:px-1
+                  [&_code:not(pre_>_code)]:rounded
+
                   [&_p]:my-3
-             
+
                   [&_a]:text-blue-600
                   [&_a]:hover:text-blue-800
                   [&_a]:underline
