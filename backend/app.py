@@ -1,3 +1,4 @@
+# python -m uvicorn app:app --reload --host 0.0.0.0 --port 3001
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -6,6 +7,8 @@ import os
 from dotenv import load_dotenv
 from llama_index.embeddings.voyageai import VoyageEmbedding
 import re
+import json
+import time
 
 # from llama_index.vector_stores.postgres import PGVectorStore
 from llama_index.core import (
@@ -27,7 +30,7 @@ from llama_index.core.retrievers import QueryFusionRetriever
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 # Load environment variables
@@ -43,6 +46,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Constants
 OUT_OF_SCOPE_PROMPT = "I'm sorry, the answer to that question isn't in my training data. You can reach out to the ENS team at [https://chat.ens.domains/](https://chat.ens.domains/)"
@@ -238,7 +242,6 @@ async def search_docs(query: str):
 
         if header_path:
             context_text = f"[Header: {header_path}]\n{context_text}"
-        print(context_text)
         context_with_citations.append(f"[{citation_num}] {context_text}")
 
     return {
@@ -266,17 +269,32 @@ async def chat(request: ChatRequest):
             raise HTTPException(status_code=400, detail="Customer ID is required")
 
         user_message = messages[-1].content
+        logging.info(f"Received user message: {user_message}")
         search_result = await search_docs(user_message)
 
         # If the search result is out of scope, return the out of scope message directly
         if search_result["is_out_of_scope"]:
+            logging.info("Search result is out of scope")
 
             async def generate_out_of_scope_response():
-                yield search_result["main_content"]
+                logging.info(
+                    f"OUT OF SCOPE - Sending initial message: {OUT_OF_SCOPE_PROMPT}"
+                )
+                yield OUT_OF_SCOPE_PROMPT
+
+                # Add links section
+                links_header = "\n\n## Potentially Useful Links\n"
+                logging.info(f"OUT OF SCOPE - Sending links header: {links_header}")
+                yield links_header
+
+                # Add each source
+                for source in search_result["sources"]:
+                    logging.info(f"Sending out-of-scope source: {source}")
+                    yield source + "\n"
 
             return StreamingResponse(
                 generate_out_of_scope_response(),
-                media_type="text/event-stream",
+                media_type="text/plain",
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
             )
 
@@ -317,6 +335,7 @@ async def chat(request: ChatRequest):
         )
 
         async def generate_response():
+            logging.info("Starting generate_response")
             response = await chat_engine.astream_chat(user_message)
             out_of_scope_detected = False
             response_chunks = []
@@ -327,6 +346,7 @@ async def chat(request: ChatRequest):
             async for message in response.async_response_gen():
                 response_chunks.append(message)
                 chunk_count += 1
+                logging.info(f"Chunk {chunk_count}: {message}")
 
                 # Only check first 5 chunks for out-of-scope
                 if chunk_count <= 5:
@@ -334,24 +354,35 @@ async def chat(request: ChatRequest):
                     # Check if the accumulated text contains the out-of-scope indicator
                     if "[OUT_OF_SCOPE]" in accumulated_text:
                         out_of_scope_detected = True
+                        logging.info("Out of scope detected in first 5 chunks")
                         break
                 elif chunk_count == 6:
+                    logging.info(f"Sending chunk 6 (accumulated): {accumulated_text}")
                     yield accumulated_text
+                    logging.info(f"Sending chunk 6 (current): {message}")
                     yield message
                 else:
+                    logging.info(f"Sending regular chunk: {message}")
                     yield message
 
             # If out of scope was detected in first 5 chunks, return the out of scope prompt
             if out_of_scope_detected:
+                logging.info(f"Sending out of scope response: {OUT_OF_SCOPE_PROMPT}")
                 yield OUT_OF_SCOPE_PROMPT
-                yield "\n\n## Potentially Useful Links\n"
+
+                links_header = "\n\n## Potentially Useful Links\n"
+                logging.info(f"Sending links header: {links_header}")
+                yield links_header
+
                 for source in search_result["sources"]:
+                    logging.info(f"Sending source: {source}")
                     yield source + "\n"
                 return
 
             cited_numbers = set()
             citations_in_chunk = re.findall(r"\[(\d+)\]", "".join(response_chunks))
             cited_numbers.update(int(num) for num in citations_in_chunk)
+            logging.info(f"Cited numbers: {cited_numbers}")
 
             # Add references
             sorted_cited_numbers = sorted(list(cited_numbers))
@@ -361,13 +392,18 @@ async def chat(request: ChatRequest):
                 if i in search_result["source_map"]:
                     final_sources.append(search_result["source_map"][i])
             if final_sources:
-                yield "\n\n## References\n"
+                logging.info("Sending references header")
+                refs_header = "\n\n## References\n"
+                logging.info(f"Sending references header: {refs_header}")
+                yield refs_header
+
                 for source in final_sources:
+                    logging.info(f"Sending reference: {source}")
                     yield source + "\n"
 
         return StreamingResponse(
             generate_response(),
-            media_type="text/event-stream",
+            media_type="text/plain",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
 
