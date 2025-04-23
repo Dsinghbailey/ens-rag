@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: unrag
+    env: python
+    plan: starter
+    buildCommand: ./build.sh
+    startCommand: cd app && python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: VOYAGE_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PORT
+        value: 10000
