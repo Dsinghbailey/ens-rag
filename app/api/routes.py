@@ -1,32 +1,34 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 import os
 import re
 import logging
 from llama_index.embeddings.voyageai import VoyageEmbedding
-from llama_index.core import (
-    StorageContext,
-    load_indices_from_storage,
-    Settings,
-)
+
 from llama_index.core.chat_engine import SimpleChatEngine
 from llama_index.llms.openai import OpenAI
 from llama_index.core.types import ChatMessage, MessageRole
 from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.postprocessor import SimilarityPostprocessor
-from llama_index.core.retrievers import QueryFusionRetriever
+from llama_index.core.retrievers import BaseRetriever
 from dotenv import load_dotenv
 import time
 
 load_dotenv()
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 router = APIRouter()
+
+# --- Globals for initialization ---
+# These will be set during application startup
+query_retriever: Optional[BaseRetriever] = None
+embedding_model: Optional[VoyageEmbedding] = None
+# --- End Globals ---
 
 # Constants
 OUT_OF_SCOPE_PROMPT = "I'm sorry, I'm not sure about that. You can reach out to the ENS team at [https://chat.ens.domains](https://chat.ens.domains)"
@@ -67,13 +69,13 @@ VOYAGE_DIMENSION = 512
 # Configure the LLM
 llm = OpenAI(model="gpt-4o-mini", temperature=0.7, api_key=OPENAI_API_KEY)
 
-# Configure the embedding model
-embedding_model = VoyageEmbedding(
-    api_key=VOYAGE_API_KEY,
-    model_name=VOYAGE_MODEL,
-    embed_batch_size=10,
-    output_dimension=VOYAGE_DIMENSION,
-)
+# Configure the embedding model - This will be moved to startup initialization
+# embedding_model = VoyageEmbedding(
+#    api_key=VOYAGE_API_KEY,
+#    model_name=VOYAGE_MODEL,
+#    embed_batch_size=10,
+#    output_dimension=VOYAGE_DIMENSION,
+# )
 
 
 class Message(BaseModel):
@@ -87,15 +89,11 @@ class ChatRequest(BaseModel):
 
 
 async def search_docs(query: str):
-    # Set the embedding model globally
-    Settings.embed_model = embedding_model
+    global query_retriever
 
-    # Load index from persisted storage
-    storage_context = StorageContext.from_defaults(persist_dir="./api/storage/1")
-
-    # Load all indices
-    indices = load_indices_from_storage(storage_context)
-    if not indices:
+    # Check if the retriever was successfully initialized
+    if query_retriever is None:
+        logging.error("Retriever not initialized. Check application startup.")
         return {
             "is_out_of_scope": True,
             "main_content": OUT_OF_SCOPE_PROMPT,
@@ -105,24 +103,25 @@ async def search_docs(query: str):
             "context_with_citations": "",
         }
 
-    # Create retrievers for each index
-    retrievers = [index.as_retriever() for index in indices]
-
-    # Create a fusion retriever
-    retriever = QueryFusionRetriever(
-        retrievers,
-        similarity_top_k=5,
-        num_queries=1,  # set to 1 to disable query generation  - it's bad
-        use_async=True,
-        verbose=True,
+    # Time the actual retrieval operation
+    retrieval_start_time = time.time()
+    logging.debug(f"Starting retrieval for query: {query}")
+    # Use the globally initialized retriever instead of creating a new one
+    nodes_with_scores = await query_retriever.aretrieve(query)
+    retrieval_end_time = time.time()
+    logging.debug(
+        f"Retrieval operation completed in {retrieval_end_time - retrieval_start_time:.4f} seconds"
     )
 
-    # Retrieve nodes using the fusion retriever
-    nodes_with_scores = await retriever.aretrieve(query)
-
+    # Time the postprocessing step
+    postproc_start_time = time.time()
     # Apply similarity postprocessor to filter out low similarity results
     postprocessor = SimilarityPostprocessor(similarity_cutoff=0.4)
     nodes_with_scores = postprocessor.postprocess_nodes(nodes_with_scores)
+    postproc_end_time = time.time()
+    logging.debug(
+        f"Postprocessing completed in {postproc_end_time - postproc_start_time:.4f} seconds"
+    )
 
     # Check if we have any nodes
     if not nodes_with_scores:
@@ -135,6 +134,8 @@ async def search_docs(query: str):
             "context_with_citations": "",
         }
 
+    # Time the citation formatting
+    citation_start_time = time.time()
     # Format response with citations
     main_response = query  # We'll need to process the nodes to generate a response
     sources = []
@@ -204,6 +205,11 @@ async def search_docs(query: str):
         if header_path:
             context_text = f"[Header: {header_path}]\n{context_text}"
         context_with_citations.append(f"[{citation_num}] {context_text}")
+
+    citation_end_time = time.time()
+    logging.debug(
+        f"Citation formatting completed in {citation_end_time - citation_start_time:.4f} seconds"
+    )
 
     return {
         "is_out_of_scope": len(sources) == 0,
