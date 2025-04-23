@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 const commonQuestions = [
   "What is ENS?",
@@ -71,7 +71,7 @@ export function CommonQuestions({ onQuestionClick }: CommonQuestionsProps) {
     <div className="w-full max-w-3xl mt-6 mb-8 overflow-hidden">
       <div
         ref={scrollContainerRef}
-        className="flex gap-3 overflow-x-auto whitespace-nowrap pb-4 scrollbar-none"
+        className="flex gap-3 pb-4 overflow-x-auto whitespace-nowrap scrollbar-none"
         style={{ scrollbarWidth: "none" }}
       >
         {commonQuestions.map((question, index) => (
@@ -79,7 +79,7 @@ export function CommonQuestions({ onQuestionClick }: CommonQuestionsProps) {
             key={index}
             onClick={() => onQuestionClick(question)}
             type="button"
-            className="cursor-pointer inline-block px-4 py-2 bg-gray-100 text-black rounded-full hover:bg-gray-200 transition-colors whitespace-nowrap"
+            className="inline-block px-4 py-2 text-black transition-colors bg-gray-100 rounded-full cursor-pointer hover:bg-gray-200 whitespace-nowrap"
           >
             {question}
           </button>

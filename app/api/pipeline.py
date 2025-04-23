@@ -3,7 +3,7 @@ import logging
 import json
 import requests
 from typing import List, Dict, Any, Optional
-from dotenv import load_dotenv
+
 
 # Load environment variables from .env file FIRST before any other imports
 try:

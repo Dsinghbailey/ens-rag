@@ -15,7 +15,7 @@ export default function ChatPage() {
 
   const { messages, input, handleInputChange, handleSubmit, status, append } =
     useChat({
-      api: "http://localhost:3001/chat",
+      api: "/api/chat", // Updated to use relative path
       body: {
         customerId: 1,
       },
@@ -76,7 +76,9 @@ export default function ChatPage() {
       {/* Header with logo */}
       <header className="fixed top-0 left-0 p-4">
         <div className="flex items-center">
-          <img src={logo} alt="ENS Logo" width={80} height={80} />
+          <a href="/" aria-label="Refresh page">
+            <img src={logo} alt="ENS Logo" width={80} height={80} />
+          </a>
         </div>
       </header>
 

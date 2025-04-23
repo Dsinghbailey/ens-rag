@@ -45,5 +45,15 @@ export default defineConfig({
   ],
   server: {
     port: 3000,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:10000',
+        changeOrigin: true
+      }
+    }
+  },
+  build: {
+    outDir: '../app/static',  // Output to the app's static directory
+    emptyOutDir: true,        // Clean the output directory before build
   },
 });
