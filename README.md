@@ -43,7 +43,7 @@ unrag/
 
 ### Environment Variables
 
-Create a `.env` file in the project root with the following variables:
+Create a `.env` file in the app folder with the following variables:
 
 ```
 OPENAI_API_KEY=your_openai_key
