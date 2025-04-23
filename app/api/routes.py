@@ -31,26 +31,26 @@ embedding_model: Optional[VoyageEmbedding] = None
 # --- End Globals ---
 
 # Constants
-OUT_OF_SCOPE_PROMPT = "I'm sorry, I'm not sure about that. You can reach out to the ENS team at [https://chat.ens.domains](https://chat.ens.domains)"
 SYSTEM_PROMPT = """
-**You are an AI assistant answering questions strictly based on the provided ENS documentation sources ONLY.**
+**You are an friendly AI assistant answering questions strictly based on the provided ENS documentation sources ONLY.**
 Your primary goal is accuracy based *solely* on the numbered sources below.
 
 **CRITICAL RULES:**
-1.  **DO NOT USE EXTERNAL KNOWLEDGE.** Base your entire answer *only* on the information explicitly present in the numbered sources provided in the 'SOURCES' section below.
-2.  **If the answer cannot be found within the 'SOURCES' section, DO NOT MAKE ONE UP.** Instead, output *only* the exact phrase `[OUT_OF_SCOPE]` and nothing else. Your confidence must be extremely high, derived directly from the source text.
+1.  **DO NOT USE EXTERNAL KNOWLEDGE.** Base your entire answer *only* on the information directly derivable from the numbered sources provided in the 'SOURCES' section below. You may synthesize information by combining facts stated across different sources or sections of the provided context, but do not add information not present in the sources.
+2.  **Handling Unanswerable Questions:**
+    *   **If the question is about ENS but the answer *cannot* be reasonably assembled from the 'SOURCES' section:** Explain that the provided documentation does not contain the specific information requested. Suggest checking the official ENS website (ens.domains), community forums (e.g., Discord), or reaching out to the ENS support team. Do *not* invent an answer. Example: "Based on the provided documentation, I can explain [aspect X mentioned in sources], but the specific details about [aspect Y not mentioned] are not covered. You might find more information on the official ENS website or by asking in their community forums."
+    *   **If the question is clearly *not* related to ENS:** State that you are here to assist specifically with questions about the Ethereum Name Service (ENS) based on its documentation. Example: "I'm designed to answer questions about the Ethereum Name Service (ENS) using its documentation. Do you have any questions about ENS?"
 3.  **Cite sources accurately:** Use the corresponding number in square brackets immediately after the information derived from that source. Every factual statement requires a citation. Only cite sources listed below.
 4.  **Format using Markdown:** Use newlines, sections, and formatting for readability. Be concise.
-5.  **Do not add a 'References' section at the end.** This will be handled separately.
+5.  **No Reference Section:** Do not add a 'References' or 'Sources' section at the end; this will be handled separately.
 
-**EXAMPLE:**
+**EXAMPLE (Answerable Question):**
 **User:** What is ENS?
-**Assistant:** ENS is a decentralized naming system for the Ethereum blockchain. [1]
+**Assistant:** ENS stands for Ethereum Name Service. It is a decentralized naming system built on the Ethereum blockchain. [1] It maps human-readable names like 'alice.eth' to machine-readable identifiers such as Ethereum addresses, other cryptocurrency addresses, content hashes, and metadata. [2]
 
 **TARGET AUDIENCE (Non-Technical):**
 * Keep language simple.
 * When applicable, suggest using the ENS manager app (app.ens.domains) over technical methods.
-
 ---
 **SOURCES:**
 {context_str}
@@ -95,8 +95,7 @@ async def search_docs(query: str):
     if query_retriever is None:
         logging.error("Retriever not initialized. Check application startup.")
         return {
-            "is_out_of_scope": True,
-            "main_content": OUT_OF_SCOPE_PROMPT,
+            "main_content": SYSTEM_PROMPT,
             "sources": [],
             "source_map": {},
             "source_nodes": [],
@@ -126,8 +125,7 @@ async def search_docs(query: str):
     # Check if we have any nodes
     if not nodes_with_scores:
         return {
-            "is_out_of_scope": True,
-            "main_content": OUT_OF_SCOPE_PROMPT,
+            "main_content": SYSTEM_PROMPT,
             "sources": [],
             "source_map": {},
             "source_nodes": [],
@@ -212,7 +210,6 @@ async def search_docs(query: str):
     )
 
     return {
-        "is_out_of_scope": len(sources) == 0,
         "main_content": main_response,
         "sources": sources,
         "source_map": source_map,
@@ -247,28 +244,6 @@ async def chat(request: ChatRequest):
             f"search_docs completed in {search_end_time - search_start_time:.4f} seconds"
         )
         # --- End Timing ---
-
-        # If the search result is out of scope, return the out of scope message directly
-        if search_result["is_out_of_scope"]:
-            logging.info("Response type: Out of scope (pre-LLM)")
-
-            async def generate_out_of_scope_response():
-                yield OUT_OF_SCOPE_PROMPT
-
-                # Add links section if there are sources
-                if search_result["sources"]:
-                    links_header = "\n\n## Potentially Useful Links\n"
-                    yield links_header
-
-                # Add each source
-                for source in search_result["sources"]:
-                    yield source + "\n"
-
-            return StreamingResponse(
-                generate_out_of_scope_response(),
-                media_type="text/plain",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-            )
 
         # --- Timing for prompt prep ---
         prep_start_time = time.time()
@@ -319,40 +294,11 @@ async def chat(request: ChatRequest):
             logging.debug("Initiating LLM stream...")
             try:
                 response = await chat_engine.astream_chat(user_message)
-                out_of_scope_detected = False
                 response_chunks = []
-                chunk_count = 0
-                accumulated_text = ""
 
-                # Check first 5 chunks for out-of-scope indicator
                 async for message in response.async_response_gen():
                     response_chunks.append(message)
-                    chunk_count += 1
-
-                    # Only check first 5 chunks for out-of-scope
-                    if chunk_count <= 5:
-                        accumulated_text += message
-                        # Check if the accumulated text contains the out-of-scope indicator
-                        if "[OUT_OF_SCOPE]" in accumulated_text:
-                            out_of_scope_detected = True
-                            break
-                    elif chunk_count == 6:
-                        yield accumulated_text
-                        yield message
-                    else:
-                        yield message
-
-                # If out of scope was detected in first 5 chunks, return the out of scope prompt
-                if out_of_scope_detected:
-                    logging.info("Response type: Out of scope")
-                    yield OUT_OF_SCOPE_PROMPT
-
-                    links_header = "\n\n## Potentially Useful Links\n"
-                    yield links_header
-
-                    for source in search_result["sources"]:
-                        yield source + "\n"
-                    return
+                    yield message
 
                 cited_numbers = set()
                 citations_in_chunk = re.findall(r"\[(\d+)\]", "".join(response_chunks))
