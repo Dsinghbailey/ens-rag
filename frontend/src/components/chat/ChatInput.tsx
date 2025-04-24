@@ -33,15 +33,15 @@ export function ChatInput({
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
         placeholder="Ask a question about ENS... "
-        className="w-full px-4 py-2 pr-16 border bg-white border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+        className="w-full px-4 py-2 pr-16 bg-white border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
       />
       <Button
         size="icon"
-        className="absolute bottom-4 right-2 h-10 w-10 rounded-full p-0 cursor-pointer"
+        className="absolute w-10 h-10 p-0 rounded-full cursor-pointer bottom-4 right-2"
         disabled={!input.trim() || isLoading}
         type="submit"
       >
-        <Send className="h-5 w-5" />
+        <Send className="w-5 h-5" />
       </Button>
     </form>
   );

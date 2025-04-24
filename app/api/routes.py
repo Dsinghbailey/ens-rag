@@ -115,8 +115,8 @@ async def search_docs(query: str):
     # Time the postprocessing step
     postproc_start_time = time.time()
     # Apply similarity postprocessor to filter out low similarity results
-    postprocessor = SimilarityPostprocessor(similarity_cutoff=0.4)
-    nodes_with_scores = postprocessor.postprocess_nodes(nodes_with_scores)
+    # postprocessor = SimilarityPostprocessor(similarity_cutoff=0.3)
+    # nodes_with_scores = postprocessor.postprocess_nodes(nodes_with_scores)
     postproc_end_time = time.time()
     logging.debug(
         f"Postprocessing completed in {postproc_end_time - postproc_start_time:.4f} seconds"
@@ -202,7 +202,7 @@ async def search_docs(query: str):
 
         if header_path:
             context_text = f"[Header: {header_path}]\n{context_text}"
-        context_with_citations.append(f"[{citation_num}] {context_text}")
+        context_with_citations.append(f"[{citation_num}] {context_text}\n")
 
     citation_end_time = time.time()
     logging.debug(

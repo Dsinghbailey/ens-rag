@@ -19,6 +19,10 @@ export function MessageList({ messages }: { messages: Message[] }) {
   const [formattedMessages, setFormattedMessages] = useState<
     Record<string, string>
   >({});
+  // Add new state to track if we should auto-scroll
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  // Add ref to track last message role
+  const lastMessageRole = useRef<string | null>(null);
 
   // useEffect to log Prism languages
   useEffect(() => {
@@ -69,6 +73,47 @@ export function MessageList({ messages }: { messages: Message[] }) {
     // Depend only on the messages array. When its reference changes
     // (new message, stream update), re-run the processing.
   }, [messages]);
+
+  // Add scroll event handler
+  useEffect(() => {
+    const container = messageContainerRef.current?.parentElement;
+    if (!container) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      // Consider "at bottom" if within 100px of the bottom
+      const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
+      setShouldAutoScroll(isAtBottom);
+    };
+
+    container.addEventListener("scroll", handleScroll);
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // Modify the scroll effect
+  useEffect(() => {
+    // Always scroll if it's a new user message
+    const isNewUserMessage =
+      messages.length > 0 &&
+      messages[messages.length - 1].role === "user" &&
+      messages[messages.length - 1].role !== lastMessageRole.current;
+
+    if (shouldAutoScroll || isNewUserMessage) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    }
+
+    // Update last message role
+    lastMessageRole.current =
+      messages.length > 0 ? messages[messages.length - 1].role : null;
+
+    const rafId = requestAnimationFrame(() => {
+      addCopyButtons();
+    });
+
+    return () => {
+      cancelAnimationFrame(rafId);
+    };
+  }, [formattedMessages, messages.length, shouldAutoScroll]);
 
   // Simplified function to ONLY add copy buttons
   const addCopyButtons = () => {
@@ -148,24 +193,6 @@ export function MessageList({ messages }: { messages: Message[] }) {
       });
     }
   };
-
-  // Effect for scrolling and adding copy buttons
-  useEffect(() => {
-    // Scroll to bottom whenever messages update
-    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-
-    // Add copy buttons slightly delayed to ensure DOM is ready
-    // Using requestAnimationFrame ensures it runs after paint
-    const rafId = requestAnimationFrame(() => {
-      addCopyButtons();
-    });
-
-    return () => {
-      cancelAnimationFrame(rafId);
-    };
-    // Re-run when formattedMessages changes (meaning new content is rendered)
-    // or when messages length changes (new message added)
-  }, [formattedMessages, messages.length]);
 
   // Renamed function: Formats, Sanitizes, AND Highlights
   const formatAndHighlightMessage = async (
@@ -309,6 +336,7 @@ export function MessageList({ messages }: { messages: Message[] }) {
 
                   [&_pre_code]:whitespace-pre-wrap
                   [&_pre_code]:word-break-normal
+                  [&_pre_code]:text-gray-100
 
                   [&_code:not(pre_>_code)]:text-sm
                   [&_code:not(pre_>_code)]:bg-gray-900
