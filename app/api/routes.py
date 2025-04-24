@@ -15,6 +15,7 @@ from llama_index.core.postprocessor import SimilarityPostprocessor
 from llama_index.core.retrievers import BaseRetriever
 from dotenv import load_dotenv
 import time
+import httpx
 
 load_dotenv()
 # Configure logging
@@ -36,7 +37,7 @@ SYSTEM_PROMPT = """
 Your primary goal is accuracy based *solely* on the numbered sources below.
 
 **CRITICAL RULES:**
-1.  **DO NOT USE EXTERNAL KNOWLEDGE.** Base your entire answer *only* on the information directly derivable from the numbered sources provided in the 'SOURCES' section below. You may synthesize information by combining facts stated across different sources or sections of the provided context, but do not add information not present in the sources.
+1.  **DO NOT USE EXTERNAL KNOWLEDGE.** Base your entire answer *only* on the information directly derivable from the numbered sources provided in the 'SOURCES' section below. You may synthesize information by combining facts across different sources or sections of the provided context, but do not add information not present in the sources.
 2.  **Handling Unanswerable Questions:**
     *   **If the question is about ENS but the answer *cannot* be reasonably assembled from the 'SOURCES' section:** Explain that the provided documentation does not contain the specific information requested. Suggest checking the official ENS website (ens.domains), community forums (e.g., Discord), or reaching out to the ENS support team. Do *not* invent an answer. Example: "Based on the provided documentation, I can explain [aspect X mentioned in sources], but the specific details about [aspect Y not mentioned] are not covered. You might find more information on the official ENS website or by asking in their community forums."
     *   **If the question is clearly *not* related to ENS:** Politely state that you cannot answer the specific question asked because your purpose is to assist with questions about the Ethereum Name Service (ENS) based on its documentation. Example: "I cannot provide information about [User's Unrelated Topic], as I'm designed to answer questions specifically about the Ethereum Name Service (ENS) using its documentation. Do you have any questions about ENS?"
@@ -76,6 +77,9 @@ llm = OpenAI(model="gpt-4o-mini", temperature=0.7, api_key=OPENAI_API_KEY)
 #    embed_batch_size=10,
 #    output_dimension=VOYAGE_DIMENSION,
 # )
+
+httpx.Client = httpx.Client(verify=False)  # Only if needed for SSL issues
+logging.getLogger("openai").setLevel(logging.DEBUG)
 
 
 class Message(BaseModel):
@@ -277,11 +281,8 @@ async def chat(request: ChatRequest):
                 )
 
         memory = ChatMemoryBuffer.from_defaults(chat_history=chat_history)
-        chat_engine = SimpleChatEngine.from_defaults(
-            llm=llm,
-            memory=memory,
-            system_prompt=f"{SYSTEM_PROMPT}",
-        )
+
+        chat_engine = SimpleChatEngine.from_defaults(llm=llm, memory=memory)
         prep_end_time = time.time()
         logging.debug(
             f"Prompt/History preparation completed in {prep_end_time - prep_start_time:.4f} seconds"
